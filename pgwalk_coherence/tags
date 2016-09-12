@@ -1,0 +1,61 @@
+!_TAG_FILE_FORMAT	2	/extended format; --format=1 will not append ;" to lines/
+!_TAG_FILE_SORTED	1	/0=unsorted, 1=sorted, 2=foldcase/
+!_TAG_PROGRAM_AUTHOR	Darren Hiebert	/dhiebert@users.sourceforge.net/
+!_TAG_PROGRAM_NAME	Exuberant Ctags	//
+!_TAG_PROGRAM_URL	http://ctags.sourceforge.net	/official site/
+!_TAG_PROGRAM_VERSION	5.9~svn20110310	//
+DELAY_REMAP	paging.cc	21;"	d	file:
+ITS	paging.cc	80;"	d	file:
+PAE	paging.cc	19;"	d	file:
+REPEAT12	paging.cc	46;"	d	file:
+REPEAT14	paging.cc	47;"	d	file:
+REPEAT16	paging.cc	48;"	d	file:
+REPEAT2	paging.cc	42;"	d	file:
+REPEAT3	paging.cc	43;"	d	file:
+REPEAT32	paging.cc	49;"	d	file:
+REPEAT4	paging.cc	44;"	d	file:
+REPEAT8	paging.cc	45;"	d	file:
+asize	paging.cc	/^	unsigned int asize;		\/\/ array size, in 4K pages$/;"	m	struct:s_opts	file:
+chain_deps	paging.cc	/^	int chain_deps;	\/\/ Adjust data dependencies for mode 1$/;"	m	struct:s_opts	file:
+change_pte	paging.cc	/^pte_t change_pte(uintptr_t cr3, uintptr_t vaddr, pte_t new_pte)$/;"	f
+do_flush_tlb_all	pgmod.c	/^static void do_flush_tlb_all(void *info)$/;"	f	file:
+dont_remap	paging.cc	/^	bool dont_remap;	\/\/ Change pointer to page table to avoid the remap. Applies to mode 0 and 1.$/;"	m	struct:s_opts	file:
+fd_devmem	paging.cc	/^int fd_devmem = -1;$/;"	v
+fops	pgmod.c	/^static struct file_operations fops = {$/;"	v	typeref:struct:file_operations	file:
+fops	pgmod.c	/^static struct file_operations fops;$/;"	v	typeref:struct:file_operations	file:
+get_cr3	pgmod.c	/^static inline uintptr_t get_cr3(void)$/;"	f	file:
+get_cr4	pgmod.c	/^static inline uintptr_t get_cr4(void)$/;"	f	file:
+main	paging.cc	/^int main(int argc, char *argv[])$/;"	f
+mode	paging.cc	/^	int mode;		\/\/ Which test to run.$/;"	m	struct:s_opts	file:
+opts	paging.cc	/^} opts;$/;"	v	typeref:struct:s_opts
+paddr_t	paging.cc	/^	typedef uint32_t paddr_t;	\/\/ 32-bit physical address$/;"	t	file:
+paddr_t	paging.cc	/^	typedef uint64_t paddr_t;	\/\/ 52-bit physical address$/;"	t	file:
+parse_opts	paging.cc	/^bool parse_opts(int argc, char *argv[])$/;"	f
+pgmod_cleanup	pgmod.c	/^module_exit(pgmod_cleanup);$/;"	v
+pgmod_cleanup	pgmod.c	/^static void __exit pgmod_cleanup(void)$/;"	f	file:
+pgmod_flush_tlb	paging.cc	/^void pgmod_flush_tlb()$/;"	f
+pgmod_init	pgmod.c	/^module_init(pgmod_init);$/;"	v
+pgmod_init	pgmod.c	/^static int __init pgmod_init(void)$/;"	f	file:
+pgmod_proc_open	pgmod.c	/^static int pgmod_proc_open(struct inode *sp_inode, struct file *sp_file)$/;"	f	file:
+pgmod_proc_read	pgmod.c	/^static ssize_t pgmod_proc_read(struct file *sp_file, char __user *buf, size_t size, loff_t *offset)$/;"	f	file:
+pgmod_proc_release	pgmod.c	/^static int pgmod_proc_release(struct inode *sp_inode, struct file *sp_file)$/;"	f	file:
+pgmod_proc_write	pgmod.c	/^static ssize_t pgmod_proc_write(struct file *sp_file, const char __user *buf, size_t size, loff_t *offset)$/;"	f	file:
+preload	paging.cc	/^	int preload;	\/\/ 0 = flush TLB, 1 = page 1, 2 = page 2.$/;"	m	struct:s_opts	file:
+pte_per_pde	paging.cc	/^	int pte_per_pde = 1024;		\/\/ 512 for PAE\/64bit, 1024 for 32-bit.$/;"	v
+pte_per_pde	paging.cc	/^	int pte_per_pde = 512;		\/\/ 512 for PAE\/64bit, 1024 for 32-bit.$/;"	v
+pte_t	paging.cc	/^	typedef uint32_t pte_t;	\/\/ 32-bit non-PAE uses 4-byte PTEs.$/;"	t	file:
+pte_t	paging.cc	/^	typedef uint64_t pte_t;	\/\/ 32-bit PAE uses 8-byte PTEs$/;"	t	file:
+pte_t	paging.cc	/^	typedef uint64_t pte_t;	\/\/ 64-bit always uses 8-byte PTEs$/;"	t	file:
+rdtsc	paging.cc	/^inline uint64_t rdtsc()$/;"	f
+read_physical	paging.cc	/^void read_physical(paddr_t addr, void* buf, size_t size)$/;"	f
+reg_t	paging.cc	/^	typedef uint32_t reg_t;	\/\/ 32-bit integer registers$/;"	t	file:
+reg_t	paging.cc	/^	typedef uint64_t reg_t;	\/\/ 64-bit integer registers$/;"	t	file:
+s_opts	paging.cc	/^struct s_opts {$/;"	s	file:
+translate	paging.cc	/^pte_t translate(uintptr_t cr3, uintptr_t vaddr, int level=0)$/;"	f
+translation_levels	paging.cc	/^	const int translation_levels = 2;$/;"	v
+translation_levels	paging.cc	/^	const int translation_levels = 3;$/;"	v
+translation_levels	paging.cc	/^	const int translation_levels = 4;$/;"	v
+translation_shifts	paging.cc	/^	const int translation_shifts[2] = { 12, 22 };$/;"	v
+translation_shifts	paging.cc	/^	const int translation_shifts[3] = { 12, 21, 30 };$/;"	v
+translation_shifts	paging.cc	/^	const int translation_shifts[4] = { 12, 21, 30, 39 };$/;"	v
+write_physical	paging.cc	/^void write_physical(paddr_t addr, const void* buf, size_t size)$/;"	f
