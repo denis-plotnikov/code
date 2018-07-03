@@ -1,0 +1,24 @@
+From 8eab7db6db611e8ccc7fd48b33e131c985863c7f Mon Sep 17 00:00:00 2001
+From: root <root@p28.perf.us-qa.sw.ru>
+Date: Tue, 31 May 2016 11:16:01 +0300
+Subject: [PATCH] set cpuid flag for hyperv remote tlb flush support
+
+---
+ target-i386/kvm.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/target-i386/kvm.c b/target-i386/kvm.c
+index 6cb6f2c..191f2c9 100644
+--- a/target-i386/kvm.c
++++ b/target-i386/kvm.c
+@@ -575,6 +575,7 @@ int kvm_arch_init_vcpu(CPUState *cs)
+         if (has_msr_hv_vapic) {
+             c->eax |= HV_X64_APIC_ACCESS_RECOMMENDED;
+         }
++        //c->eax |= HV_X64_REMOTE_TLB_FLUSH_RECOMMENDED; 
+         c->ebx = cpu->hyperv_spinlock_attempts;
+ 
+         c = &cpuid_data.entries[cpuid_i++];
+-- 
+1.8.3.1
+

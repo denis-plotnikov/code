@@ -1,0 +1,442 @@
+From dc8af1922beb7dd5def7bd0a043d8ec55bcf2031 Mon Sep 17 00:00:00 2001
+From: root <root@p28.perf.us-qa.sw.ru>
+Date: Tue, 31 May 2016 11:13:43 +0300
+Subject: [PATCH] my modes for hypercall tlb flush
+
+---
+ arch/x86/include/asm/smp.h           |   1 +
+ arch/x86/include/uapi/asm/hyperv.h   |   7 ++
+ arch/x86/include/uapi/asm/kvm_perf.h |   1 +
+ arch/x86/kvm/hyperv.c                | 136 ++++++++++++++++++++++++++++++++++-
+ arch/x86/kvm/trace.h                 |  40 +++++++++++
+ arch/x86/kvm/vmx.c                   |  37 +++++++++-
+ arch/x86/kvm/x86.c                   |   2 +
+ include/linux/kvm_host.h             |   1 +
+ virt/kvm/kvm_main.c                  |  34 +++++++++
+ 9 files changed, 255 insertions(+), 4 deletions(-)
+
+diff --git a/arch/x86/include/asm/smp.h b/arch/x86/include/asm/smp.h
+index 66b0573..94db67e 100644
+--- a/arch/x86/include/asm/smp.h
++++ b/arch/x86/include/asm/smp.h
+@@ -118,6 +118,7 @@ static inline void smp_send_reschedule(int cpu)
+ 
+ static inline void arch_send_call_function_single_ipi(int cpu)
+ {
++	// denis: invokes native_send_call_func_single_ipi
+ 	smp_ops.send_call_func_single_ipi(cpu);
+ }
+ 
+diff --git a/arch/x86/include/uapi/asm/hyperv.h b/arch/x86/include/uapi/asm/hyperv.h
+index 9b1a918..9113049 100644
+--- a/arch/x86/include/uapi/asm/hyperv.h
++++ b/arch/x86/include/uapi/asm/hyperv.h
+@@ -226,6 +226,8 @@
+ 		(~((1ull << HV_X64_MSR_HYPERCALL_PAGE_ADDRESS_SHIFT) - 1))
+ 
+ /* Declare the various hypercall operations. */
++#define HVCALL_FLUSH_VIRTUAL_ADDRESS_SPACE	0x0002
++#define HVCALL_FLUSH_VIRTUAL_ADDRESS_LIST	0x0003
+ #define HVCALL_NOTIFY_LONG_SPIN_WAIT		0x0008
+ #define HVCALL_POST_MESSAGE			0x005c
+ #define HVCALL_SIGNAL_EVENT			0x005d
+@@ -243,6 +245,11 @@
+ #define HV_PROCESSOR_POWER_STATE_C2		2
+ #define HV_PROCESSOR_POWER_STATE_C3		3
+ 
++/* define virtual address flush flags */
++#define HV_FLUSH_ALL_PROCESSORS			0x00000001
++#define HV_FLUSH_ALL_VIRTUAL_ADDRESS_SPACES	0x00000002
++#define HV_FLUSH_NON_GLOBAL_MAPPINGS_ONLY	0x00000004
++
+ /* hypercall status code */
+ #define HV_STATUS_SUCCESS			0
+ #define HV_STATUS_INVALID_HYPERCALL_CODE	2
+diff --git a/arch/x86/include/uapi/asm/kvm_perf.h b/arch/x86/include/uapi/asm/kvm_perf.h
+index 3bb964f..1fc2542 100644
+--- a/arch/x86/include/uapi/asm/kvm_perf.h
++++ b/arch/x86/include/uapi/asm/kvm_perf.h
+@@ -12,5 +12,6 @@
+ #define KVM_ENTRY_TRACE "kvm:kvm_entry"
+ #define KVM_EXIT_TRACE "kvm:kvm_exit"
+ #define KVM_EXIT_REASON "exit_reason"
++#define KVM_TLB_FLUSH_TRACE "kvm:kvm_tlb_flush"
+ 
+ #endif /* _ASM_X86_KVM_PERF_H */
+diff --git a/arch/x86/kvm/hyperv.c b/arch/x86/kvm/hyperv.c
+index 01bd7b7..2256720 100644
+--- a/arch/x86/kvm/hyperv.c
++++ b/arch/x86/kvm/hyperv.c
+@@ -28,10 +28,12 @@
+ 
+ #include <linux/kvm_host.h>
+ #include <linux/highmem.h>
++#include <linux/smp.h>
+ #include <asm/apicdef.h>
+ #include <trace/events/kvm.h>
+ 
+ #include "trace.h"
++static DEFINE_PER_CPU(int, hc_id);
+ 
+ static inline u64 synic_read_sint(struct kvm_vcpu_hv_synic *synic, int sint)
+ {
+@@ -1064,12 +1066,84 @@ static int kvm_hv_hypercall_complete_userspace(struct kvm_vcpu *vcpu)
+ 	return 1;
+ }
+ 
++void printk_hv(struct kvm_vcpu *vcpu, const char *fmt, ...) 
++{
++	va_list args;
++	int last_idx;
++#define S_SIZE 128
++	char s[S_SIZE];
++
++	last_idx = snprintf(s, S_SIZE, "[cpu: %d id: %d] ", vcpu->cpu, this_cpu_read(hc_id));
++	va_start(args, fmt);
++	vsnprintf(&s[last_idx], S_SIZE - last_idx, fmt, args);
++#undef S_SIZE
++	va_end(args);
++	printk("%s", s);
++}
++
++static int kvm_hv_flush_tlb(struct kvm_vcpu* s_vcpu, unsigned long addr_space, unsigned long flags, unsigned long cpu_mask)
++{
++	/*
++	 * do not use flags and cpu_mask so far
++	 * will be implementes later
++	 * this time just flush all tlb of vcpus online
++	 * By this point we have to make sure that everything
++	 * works although it's non-optimal and may be slower
++	 * because of all vcpu tlb-s flushing
++	 */
++	int idx;
++	struct kvm_vcpu *vcpu;
++	struct kvm *kvm = s_vcpu->kvm;
++	int res;
++	int cpu_num;
++	int update_cnt = 0;
++
++	if (flags & HV_FLUSH_ALL_PROCESSORS)
++		kvm_flush_remote_tlbs(kvm);
++	else
++		kvm_make_masked_cpus_request(kvm, KVM_REQ_TLB_FLUSH, cpu_mask);
++/*
++******************** CPUMASK mod
++	if (cpu_mask == 0)
++		kvm_flush_remote_tlbs(kvm);
++	else {
++		kvm_make_mask_cpus_request(kvm, KVM_REQ_TLB_FLUSH, cpu_mask);
++	}
++*/
++	/*
++	kvm_for_each_vcpu(idx, vcpu, kvm) {
++		//if (vcpu == s_vcpu )
++		//	continue;
++
++		//if(!test_bit(s_vcpu->vcpu_id, (void*)&vcpu_mask))
++		//	continue;
++		cpu_num = vcpu->cpu;
++		//printk_hv(s_vcpu, "Before smp call for cpu %d\n", cpu_num);
++		//res = smp_call_function_single(vcpu->cpu,
++		//		(smp_call_func_t) kvm_x86_ops->tlb_flush, vcpu, 1);
++		//printk_hv(s_vcpu, "After smp call for cpu %d. Result: %d\n", cpu_num, res);
++		update_cnt++;
++		if (res)
++			return HV_STATUS_INVALID_HYPERCALL_CODE;
++	}
++	//printk_hv(s_vcpu, "After tlb flushing.\n");
++
++	if(update_cnt != 2) {
++		//printk_hv(s_vcpu, "Too few cpus online\n");
++		return HV_STATUS_INVALID_HYPERCALL_CODE;
++	}
++	else
++		return HV_STATUS_SUCCESS;
++	*/
++	return HV_STATUS_SUCCESS;
++}
++
+ int kvm_hv_hypercall(struct kvm_vcpu *vcpu)
+ {
+ 	u64 param, ingpa, outgpa, ret;
+ 	uint16_t code, rep_idx, rep_cnt, res = HV_STATUS_SUCCESS, rep_done = 0;
+ 	bool fast, longmode;
+-
++	unsigned long *in_param_base, addr_space, flags, cpu_mask, gva, gva_count;
+ 	/*
+ 	 * hypercall generates UD from non zero cpl and real mode
+ 	 * per HYPER-V spec
+@@ -1106,8 +1180,11 @@ int kvm_hv_hypercall(struct kvm_vcpu *vcpu)
+ 
+ 	/* Hypercall continuation is not supported yet */
+ 	if (rep_cnt || rep_idx) {
+-		res = HV_STATUS_INVALID_HYPERCALL_CODE;
+-		goto set_result;
++		if (code != 3) {
++			printk_hv(vcpu, "Continuation is not supported (code: %d)\n", code);
++			res = HV_STATUS_INVALID_HYPERCALL_CODE;
++			goto set_result;
++		}
+ 	}
+ 
+ 	switch (code) {
+@@ -1129,13 +1206,66 @@ int kvm_hv_hypercall(struct kvm_vcpu *vcpu)
+ 		vcpu->arch.complete_userspace_io =
+ 				kvm_hv_hypercall_complete_userspace;
+ 		return 0;
++	case HVCALL_FLUSH_VIRTUAL_ADDRESS_SPACE:
++		this_cpu_add(hc_id, 1);
++		//printk_hv(vcpu, "--B--> Flush virtual address space\n");
++		//res = HV_STATUS_INVALID_HYPERCALL_CODE;
++		////printk_hv(vcpu, "ingpa: %lx\n", ingpa);
++		in_param_base = (unsigned long *) gfn_to_hva(vcpu->kvm, ingpa >> PAGE_SHIFT);
++		////printk_hv(vcpu, "in_param_base: %p\n", in_param_base);
++		addr_space = in_param_base[0];
++		flags = in_param_base[1];
++		cpu_mask = in_param_base[2];
++		////printk_hv(vcpu, "Params gotten [%lx, %lx, %lx]\n", addr_space, flags, cpu_mask);
++
++		//printk_hv(vcpu, "space [%lx, %lx, %lx]\n", addr_space, flags, cpu_mask);
++		res = kvm_hv_flush_tlb(vcpu, addr_space, flags, cpu_mask);
++
++		//printk_hv(vcpu, "--E--> Flush virtual address space done. result: %d\n", res);
++		break;
++	case HVCALL_FLUSH_VIRTUAL_ADDRESS_LIST:
++		this_cpu_add(hc_id, 1);
++		//printk_hv(vcpu, "--B--> Flush list\n");
++		//printk_hv(vcpu, "Reps to do: %u\n", rep_cnt);
++		////printk_hv(vcpu, "ingpa: %lx\n", ingpa);
++		in_param_base = (unsigned long *) gfn_to_hva(vcpu->kvm, ingpa >> PAGE_SHIFT);
++		//printk_hv(vcpu, "in_param_base\n");
++		////printk_hv(vcpu, "in_param_base: %p\n", in_param_base);
++		addr_space = in_param_base[0];
++		flags = in_param_base[1];
++		cpu_mask = in_param_base[2];
++		gva = in_param_base[4];
++		trace_kvm_remote_tlb_flush_hc(vcpu->vcpu_id, cpu_mask, flags);		
++		//printk_hv(vcpu, "vals assined\n");
++
++		/*
++		printk_hv(
++			vcpu,
++			"address_list [%lx, %lx, %lx, %lx, %ld]\n",
++			addr_space, flags, cpu_mask, gva, gva & 0xfff
++		);
++		*/
++		res = kvm_hv_flush_tlb(vcpu, addr_space, flags, cpu_mask);
++		if (res) {
++			//printk_hv(vcpu, "!!!!!!!!!!!!!!!!!!!!! rep done set to 0\n");
++			rep_done = 0;
++		}
++		else {
++			rep_done = rep_cnt;
++		}
++
++		//printk_hv(vcpu, "--E--> Flush list done. result: %d\n", res);
++		break;
+ 	default:
++		printk_hv(vcpu, "********** No handler for hypercall code: %d\n", code);
+ 		res = HV_STATUS_INVALID_HYPERCALL_CODE;
+ 		break;
+ 	}
+ 
+ set_result:
+ 	ret = res | (((u64)rep_done & 0xfff) << 32);
++	//printk_hv(vcpu, "Hypercall res is to %lx\n", ret);
+ 	kvm_hv_hypercall_set_result(vcpu, ret);
++	//printk_hv(vcpu, "Hypercall res has been set\n");
+ 	return 1;
+ }
+diff --git a/arch/x86/kvm/trace.h b/arch/x86/kvm/trace.h
+index 2f1ea2f..2419357 100644
+--- a/arch/x86/kvm/trace.h
++++ b/arch/x86/kvm/trace.h
+@@ -9,6 +9,46 @@
+ 
+ #undef TRACE_SYSTEM
+ #define TRACE_SYSTEM kvm
++/*
++ * Tracepoint for remote tlb flush hypercall.
++ */
++TRACE_EVENT(kvm_remote_tlb_flush_hc,
++	TP_PROTO(unsigned int vcpu_id, unsigned long cpu_mask, unsigned long flags),
++	TP_ARGS(vcpu_id, cpu_mask, flags),
++
++	TP_STRUCT__entry(
++		__field(	unsigned int,	vcpu_id		)
++		__field(	unsigned long,	cpu_mask	)
++		__field(	unsigned long,	flags		)
++	),
++
++	TP_fast_assign(
++		__entry->vcpu_id	= vcpu_id;
++		__entry->cpu_mask	= cpu_mask;
++		__entry->flags		= flags;
++	),
++
++	TP_printk("vcpu %u mask %lx flags %lx",
++		__entry->vcpu_id, __entry->cpu_mask, __entry->flags)
++);
++
++/*
++ * Tracepoint for tlb_flush.
++ */
++TRACE_EVENT(kvm_tlb_flush,
++	TP_PROTO(unsigned int vcpu_id),
++	TP_ARGS(vcpu_id),
++
++	TP_STRUCT__entry(
++		__field(	unsigned int,	vcpu_id		)
++	),
++
++	TP_fast_assign(
++		__entry->vcpu_id	= vcpu_id;
++	),
++
++	TP_printk("vcpu %u", __entry->vcpu_id)
++);
+ 
+ /*
+  * Tracepoint for guest mode entry.
+diff --git a/arch/x86/kvm/vmx.c b/arch/x86/kvm/vmx.c
+index 133679d..ea0949b 100644
+--- a/arch/x86/kvm/vmx.c
++++ b/arch/x86/kvm/vmx.c
+@@ -1424,6 +1424,15 @@ static void loaded_vmcs_clear(struct loaded_vmcs *loaded_vmcs)
+ 			 __loaded_vmcs_clear, loaded_vmcs, 1);
+ }
+ 
++static inline void vpid_sync_vcpu_addr(int vpid, gva_t gva)
++{
++	if (vpid == 0)
++		return;
++
++	if (cpu_has_vmx_invvpid_single())
++		__invvpid(VMX_EPT_EXTENT_INDIVIDUAL_ADDR, vpid, gva);
++}
++
+ static inline void vpid_sync_vcpu_single(int vpid)
+ {
+ 	if (vpid == 0)
+@@ -1463,6 +1472,16 @@ static inline void ept_sync_context(u64 eptp)
+ 	}
+ }
+ 
++static inline void ept_sync_context_addr(u64 eptp, gpa_t gpa)
++{
++	if (enable_ept) {
++		if (cpu_has_vmx_invept_context())
++			__invept(VMX_EPT_EXTENT_INDIVIDUAL_ADDR, eptp, gpa);
++		else
++			ept_sync_global();
++	}
++}
++
+ static __always_inline void vmcs_check16(unsigned long field)
+ {
+         BUILD_BUG_ON_MSG(__builtin_constant_p(field) && ((field) & 0x6001) == 0x2000,
+@@ -3174,7 +3193,6 @@ static void vmclear_local_loaded_vmcss(void)
+ static void kvm_cpu_vmxoff(void)
+ {
+ 	asm volatile (__ex(ASM_VMX_VMXOFF) : : : "cc");
+-
+ 	intel_pt_handle_vmx(0);
+ }
+ 
+@@ -3705,9 +3723,26 @@ static inline void __vmx_flush_tlb(struct kvm_vcpu *vcpu, int vpid)
+ 
+ static void vmx_flush_tlb(struct kvm_vcpu *vcpu)
+ {
++	trace_kvm_tlb_flush(vcpu->vcpu_id);
+ 	__vmx_flush_tlb(vcpu, to_vmx(vcpu)->vpid);
+ }
+ 
++static void vmx_flush_tlb_addr(struct kvm_vcpu *vcpu, gva_t gva)
++{
++	if (cpu_has_vmx_invvpid_single())
++		vpid_sync_vcpu_addr(to_vmx(vcpu)->vpid, gva);
++	else
++		vpid_sync_vcpu_global();
++
++	if(enable_ept) {
++		if (!VALID_PAGE(vcpu->arch.mmu.root_hpa))
++			return;
++
++		gpa_t gpa = kvm_mmu_gva_to_gpa_system(vcpu, gva, NULL);
++		ept_sync_context_addr(construct_eptp(vcpu->arch.mmu.root_hpa), gpa);
++	}
++}
++
+ static void vmx_decache_cr0_guest_bits(struct kvm_vcpu *vcpu)
+ {
+ 	ulong cr0_guest_owned_bits = vcpu->arch.cr0_guest_owned_bits;
+diff --git a/arch/x86/kvm/x86.c b/arch/x86/kvm/x86.c
+index 9b7798c..5ce9b8f 100644
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -8429,3 +8429,5 @@ EXPORT_TRACEPOINT_SYMBOL_GPL(kvm_write_tsc_offset);
+ EXPORT_TRACEPOINT_SYMBOL_GPL(kvm_ple_window);
+ EXPORT_TRACEPOINT_SYMBOL_GPL(kvm_pml_full);
+ EXPORT_TRACEPOINT_SYMBOL_GPL(kvm_pi_irte_update);
++EXPORT_TRACEPOINT_SYMBOL_GPL(kvm_tlb_flush);
++EXPORT_TRACEPOINT_SYMBOL_GPL(kvm_remote_tlb_flush_hc);
+diff --git a/include/linux/kvm_host.h b/include/linux/kvm_host.h
+index 5276fe0..b2c3e56 100644
+--- a/include/linux/kvm_host.h
++++ b/include/linux/kvm_host.h
+@@ -660,6 +660,7 @@ void kvm_put_guest_fpu(struct kvm_vcpu *vcpu);
+ void kvm_flush_remote_tlbs(struct kvm *kvm);
+ void kvm_reload_remote_mmus(struct kvm *kvm);
+ bool kvm_make_all_cpus_request(struct kvm *kvm, unsigned int req);
++bool kvm_make_masked_cpus_request(struct kvm *kvm, unsigned int req, unsigned long vcpu_bitmap);
+ 
+ long kvm_arch_dev_ioctl(struct file *filp,
+ 			unsigned int ioctl, unsigned long arg);
+diff --git a/virt/kvm/kvm_main.c b/virt/kvm/kvm_main.c
+index 4fd482f..f4d130d 100644
+--- a/virt/kvm/kvm_main.c
++++ b/virt/kvm/kvm_main.c
+@@ -188,6 +188,40 @@ bool kvm_make_all_cpus_request(struct kvm *kvm, unsigned int req)
+ 	return called;
+ }
+ 
++bool kvm_make_masked_cpus_request(struct kvm *kvm, unsigned int req, unsigned long vcpu_bitmap)
++{
++	int i, cpu, me;
++	cpumask_var_t cpus;
++	bool called = true;
++	struct kvm_vcpu *vcpu;
++
++	zalloc_cpumask_var(&cpus, GFP_ATOMIC);
++
++	me = get_cpu();
++	kvm_for_each_vcpu(i, vcpu, kvm) {
++		if (test_bit(i, &vcpu_bitmap)) {
++			kvm_make_request(req, vcpu);
++			cpu = vcpu->cpu;
++			
++			/* Set ->requests bit before we read ->mode. */
++			smp_mb__after_atomic();
++
++			if (cpus != NULL && cpu != -1 && cpu != me &&
++		      		kvm_vcpu_exiting_guest_mode(vcpu) != OUTSIDE_GUEST_MODE)
++					cpumask_set_cpu(cpu, cpus);
++		}
++
++	}
++	if (unlikely(cpus == NULL))
++		smp_call_function_many(cpu_online_mask, ack_flush, NULL, 1);
++	else if (!cpumask_empty(cpus))
++		smp_call_function_many(cpus, ack_flush, NULL, 1);
++	else
++		called = false;
++	put_cpu();
++	free_cpumask_var(cpus);
++	return called;
++}
+ #ifndef CONFIG_HAVE_KVM_ARCH_TLB_FLUSH_ALL
+ void kvm_flush_remote_tlbs(struct kvm *kvm)
+ {
+-- 
+1.8.3.1
+
